@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Serial GUI Tool - Advanced</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background-color: #333;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 20px;
+      position: relative;
+    }
+    button {
+      background-color: #1f1f1f;
+      color: #ffffff;
+      border: 1px solid #444;
+      padding: 10px 16px;
+      margin: 5px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background-color: #2a2a2a;
+    }
+    .icon-btn {
+      background: none;
+      border: none;
+      color: #bbb;
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 13px;
+    }
+    .icon-btn:hover {
+      color: #fff;
+    }
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .custom-wrapper, .monitor-wrapper {
+      display: flex;
+      align-items: center;
+      margin: 5px;
+      background-color: #1f1f1f;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 6px 10px;
+    }
+    .custom-button {
+      user-select: none;
+      border: none;
+      background: none;
+      color: inherit;
+      padding: 10px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .custom-button.dragging {
+      opacity: 0.5;
+    }
+    #log {
+      flex: 1;
+      overflow-y: auto;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      padding: 10px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 13px;
+      border-radius: 6px;
+      box-shadow: inset 0 0 5px #000;
+      margin-top: 10px;
+      margin-bottom: 4.1vh;
+    }
+    form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    input[type="text"] {
+      padding: 6px;
+      background-color: #1f1f1f;
+      border: 1px solid #444;
+      color: white;
+      border-radius: 4px;
+    }
+    h2 { margin: 0 0 10px; }
+    h4 { margin-top: 20px; margin-bottom: 10px; }
+    .row { margin-bottom: 10px; }
+    #logo {
+      max-height: 138px;
+      opacity: 1;
+      filter: invert(1);
+      mix-blend-mode: screen;
+    }
+    #logo-wrapper {
+      position: absolute;
+      top: -20px;
+      right: 30px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    #connect-btn {
+      margin-top: 8px;
+      font-size: 13px;
+      padding: 6px 12px;
+      z-index: 10;
+    }
+    .status-light {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      margin-left: 8px;
+      background-color: #555;
+      box-shadow: 0 0 3px #000;
+    }
+    /* Clear Log button style */
+    #clear-log-btn {
+      background-color: #b22222;
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      margin-left: 10px;
+    }
+    #clear-log-btn:hover {
+      background-color: #d32f2f;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h2>🛠 Serial GUI Tool</h2>
+    <div id="logo-wrapper">
+      <img src="logo.png" id="logo" alt="Logo">
+      <button id="connect-btn" onclick="connect()">🔌 Connect</button>
+    </div>
+    <div class="row button-row" id="default-buttons"></div>
+    <div class="row button-row" id="custom-buttons" ondragover="event.preventDefault()"></div>
+    <form id="addForm" onsubmit="handleFormSubmit(event)">
+      <input type="text" id="btnLabel" placeholder="Label" required>
+      <input type="text" id="btnCommand" placeholder="Command" required>
+      <input type="text" id="btnIcon" placeholder="Icon (optional)">
+      <button type="submit">💾 Save</button>
+      <button type="button" onclick="resetCustomButtons()">♻️ Reset All</button>
+    </form>
+    <h4>📡 Pin Monitors</h4>
+    <div class="row button-row" id="monitor-container" ondragover="event.preventDefault()"></div>
+    <form id="monitorForm" onsubmit="handleMonitorForm(event)">
+      <input type="text" id="monitorLabel" placeholder="Label" required>
+      <input type="text" id="monitorId" placeholder="ID (e.g. btn1)" required>
+      <input type="text" id="monitorIcon" placeholder="Icon (optional)">
+      <button type="submit">💾 Save Monitor</button>
+      <button type="button" onclick="resetPinMonitors()">♻️ Reset Monitors</button>
+    </form>
+    <h4>
+      📟 Serial Log
+      <button id="clear-log-btn" onclick="clearLog()">Clear</button>
+    </h4>
+    <div id="log"></div>
+  </div>
+  <script>
+    // Storage keys and state variables
+    const STORAGE_KEY = 'serialGuiTool_customButtons';
+    const MONITOR_KEY = 'serialGuiTool_pinMonitors';
+    let port, writer, reader;
+    let dragSourceIndex = null, editIndex = null, editMonitorIndex = null;
+    // DOM elements
+    const logEl = document.getElementById("log");
+    const defaultButtonsEl = document.getElementById("default-buttons");
+    const customButtonsEl = document.getElementById("custom-buttons");
+    const connectBtn = document.getElementById("connect-btn");
+    // Audio for bell sound
+    const bellSound = new AudioContext();
+    function playBeep() {
+      const osc = bellSound.createOscillator();
+      osc.frequency.value = 800;
+      osc.connect(bellSound.destination);
+      osc.start();
+      osc.stop(bellSound.currentTime + 0.1);
+    }
+    // Default command buttons
+    const defaultButtons = [
+      { label: "LED ON (on)", command: "on" },
+      { label: "LED OFF (off)", command: "off" },
+      { label: "Send a", command: "a" },
+      { label: "Send b", command: "b" },
+      { label: "Send c", command: "c" },
+    ];
+    // Custom command buttons functions
+    function getCustomButtons() {
+      const data = localStorage.getItem(STORAGE_KEY);
+      return data ? JSON.parse(data) : [];
+    }
+    function saveCustomButtons(buttons) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(buttons));
+    }
+    function renderButtons() {
+      // Render default buttons
+      defaultButtonsEl.innerHTML = '';
+      defaultButtons.forEach(b => {
+        const btn = document.createElement("button");
+        btn.textContent = b.label;
+        btn.onclick = () => sendCommand(b.command);
+        defaultButtonsEl.appendChild(btn);
+      });
+      // Render custom buttons
+      customButtonsEl.innerHTML = '';
+      getCustomButtons().forEach((b, i) => {
+        customButtonsEl.appendChild(createCustomButton(b, i));
+      });
+    }
+    function createCustomButton(button, index) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "custom-wrapper";
+      wrapper.setAttribute("draggable", true);
+      wrapper.dataset.index = index;
+      const btn = document.createElement("button");
+      btn.className = "custom-button";
+      btn.innerHTML = button.icon ? `${button.icon} ${button.label}` : button.label;
+      btn.onclick = () => sendCommand(button.command);
+      const editBtn = document.createElement("button");
+      editBtn.className = "icon-btn";
+      editBtn.innerHTML = "✏️";
+      editBtn.title = "Edit";
+      editBtn.onclick = (e) => { e.stopPropagation(); editCustomButton(index); };
+      const delBtn = document.createElement("button");
+      delBtn.className = "icon-btn";
+      delBtn.innerHTML = "❌";
+      delBtn.title = "Delete";
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteCustomButton(index); };
+      wrapper.appendChild(btn);
+      wrapper.appendChild(editBtn);
+      wrapper.appendChild(delBtn);
+      wrapper.addEventListener("dragstart", () => {
+        dragSourceIndex = index;
+        wrapper.classList.add("dragging");
+      });
+      wrapper.addEventListener("dragend", () => wrapper.classList.remove("dragging"));
+      wrapper.addEventListener("drop", (e) => {
+        const targetIndex = e.currentTarget.dataset.index;
+        reorderCustomButtons(dragSourceIndex, targetIndex);
+      });
+      return wrapper;
+    }
+    function handleFormSubmit(event) {
+      event.preventDefault();
+      const label = document.getElementById("btnLabel").value.trim();
+      const command = document.getElementById("btnCommand").value.trim();
+      const icon = document.getElementById("btnIcon").value.trim();
+      if (!label || !command) return;
+      const buttons = getCustomButtons();
+      if (editIndex !== null) {
+        buttons[editIndex] = { label, command, icon };
+        editIndex = null;
+      } else {
+        buttons.push({ label, command, icon });
+      }
+      saveCustomButtons(buttons);
+      renderButtons();
+      event.target.reset();
+    }
+    function editCustomButton(index) {
+      const buttons = getCustomButtons();
+      const b = buttons[index];
+      document.getElementById("btnLabel").value = b.label;
+      document.getElementById("btnCommand").value = b.command;
+      document.getElementById("btnIcon").value = b.icon || '';
+      editIndex = index;
+    }
+    function deleteCustomButton(index) {
+      const buttons = getCustomButtons();
+      buttons.splice(index, 1);
+      saveCustomButtons(buttons);
+      renderButtons();
+    }
+    function resetCustomButtons() {
+      if (confirm("Are you sure you want to remove all custom buttons?")) {
+        localStorage.removeItem(STORAGE_KEY);
+        renderButtons();
+      }
+    }
+    function reorderCustomButtons(fromIndex, toIndex) {
+      if (fromIndex === toIndex) return;
+      const buttons = getCustomButtons();
+      const moved = buttons.splice(fromIndex, 1)[0];
+      buttons.splice(toIndex, 0, moved);
+      saveCustomButtons(buttons);
+      renderButtons();
+    }
+    // Pin Monitors functions
+    function getPinMonitors() {
+      const data = localStorage.getItem(MONITOR_KEY);
+      return data ? JSON.parse(data) : [];
+    }
+    function savePinMonitors(monitors) {
+      localStorage.setItem(MONITOR_KEY, JSON.stringify(monitors));
+    }
+    function renderMonitors() {
+      const container = document.getElementById("monitor-container");
+      container.innerHTML = '';
+      getPinMonitors().forEach((m, i) => {
+        container.appendChild(createMonitor(m, i));
+      });
+    }
+    function createMonitor(monitor, index) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "monitor-wrapper";
+      wrapper.setAttribute("draggable", true);
+      wrapper.dataset.index = index;
+      wrapper.dataset.id = monitor.id;
+      const labelSpan = document.createElement("span");
+      labelSpan.innerHTML = monitor.icon ? `${monitor.icon} ${monitor.label}` : monitor.label;
+      const statusDiv = document.createElement("div");
+      statusDiv.className = "status-light";
+      statusDiv.id = "monitor-" + monitor.id;
+      const editBtn = document.createElement("button");
+      editBtn.className = "icon-btn";
+      editBtn.innerHTML = "✏️";
+      editBtn.title = "Edit";
+      editBtn.onclick = (e) => { e.stopPropagation(); editMonitor(index); };
+      const delBtn = document.createElement("button");
+      delBtn.className = "icon-btn";
+      delBtn.innerHTML = "❌";
+      delBtn.title = "Delete";
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteMonitor(index); };
+      wrapper.appendChild(labelSpan);
+      wrapper.appendChild(statusDiv);
+      wrapper.appendChild(editBtn);
+      wrapper.appendChild(delBtn);
+      wrapper.addEventListener("dragstart", () => {
+        dragSourceIndex = index;
+        wrapper.classList.add("dragging");
+      });
+      wrapper.addEventListener("dragend", () => wrapper.classList.remove("dragging"));
+      wrapper.addEventListener("drop", (e) => {
+        const targetIndex = e.currentTarget.dataset.index;
+        reorderMonitors(dragSourceIndex, targetIndex);
+      });
+      return wrapper;
+    }
+    function handleMonitorForm(e) {
+      e.preventDefault();
+      const label = document.getElementById("monitorLabel").value.trim();
+      const id = document.getElementById("monitorId").value.trim();
+      const icon = document.getElementById("monitorIcon").value.trim();
+      if (!label || !id) return;
+      const monitors = getPinMonitors();
+      if (editMonitorIndex !== null) {
+        monitors[editMonitorIndex] = { label, id, icon };
+        editMonitorIndex = null;
+      } else {
+        monitors.push({ label, id, icon });
+      }
+      savePinMonitors(monitors);
+      e.target.reset();
+      renderMonitors();
+    }
+    function editMonitor(index) {
+      const monitors = getPinMonitors();
+      const m = monitors[index];
+      document.getElementById("monitorLabel").value = m.label;
+      document.getElementById("monitorId").value = m.id;
+      document.getElementById("monitorIcon").value = m.icon || '';
+      editMonitorIndex = index;
+    }
+    function deleteMonitor(index) {
+      const monitors = getPinMonitors();
+      monitors.splice(index, 1);
+      savePinMonitors(monitors);
+      renderMonitors();
+    }
+    function resetPinMonitors() {
+      if (confirm("Are you sure you want to remove all pin monitors?")) {
+        localStorage.removeItem(MONITOR_KEY);
+        renderMonitors();
+      }
+    }
+    function reorderMonitors(fromIndex, toIndex) {
+      if (fromIndex === toIndex) return;
+      const monitors = getPinMonitors();
+      const moved = monitors.splice(fromIndex, 1)[0];
+      monitors.splice(toIndex, 0, moved);
+      savePinMonitors(monitors);
+      renderMonitors();
+    }
+    // Serial communication functions
+    async function connect() {
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+        writer = port.writable.getWriter();
+        readLoop();
+        // Update connect button to show connected status
+        connectBtn.textContent = "✅ Connected";
+        connectBtn.style.backgroundColor = "#228B22";
+        connectBtn.disabled = true;
+      } catch (err) {
+        appendLog("Error connecting to serial port: " + err);
+      }
+    }
+    async function sendCommand(cmd) {
+      if (!writer) {
+        appendLog("Serial port not connected.");
+        return;
+      }
+      const encoder = new TextEncoder();
+      await writer.write(encoder.encode(cmd + "\n"));
+      appendLog("> " + cmd);
+    }
+    function appendLog(text) {
+      logEl.textContent += text + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function clearLog() {
+      logEl.textContent = "";
+    }
+    async function readLoop() {
+      const decoder = new TextDecoder();
+      reader = port.readable.getReader();
+      let buffer = "";
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value);
+          if (buffer.includes('\u0007')) {
+            playBeep();
+            buffer = buffer.replace(/\u0007/g, '');
+          }
+          const lines = buffer.split("\n");
+          buffer = lines.pop();
+          for (const line of lines) {
+            appendLog(line);
+            // Check for pin monitor updates (e.g. "btn1_1" or "btn1_0")
+            const pinMatch = line.match(/(btn\d+)_([01])/);
+            if (pinMatch) {
+              const id = pinMatch[1];
+              const state = pinMatch[2];
+              updateMonitorStatus(id, state);
+            }
+          }
+        }
+      } catch (err) {
+        appendLog("Error reading from serial port: " + err);
+      } finally {
+        reader.releaseLock();
+        // Connection lost; update connect button to allow reconnection.
+        connectBtn.textContent = "🔌 Connect";
+        connectBtn.style.backgroundColor = "#1f1f1f";
+        connectBtn.disabled = false;
+      }
+    }
+    function updateMonitorStatus(id, state) {
+      const el = document.getElementById("monitor-" + id);
+      if (el) {
+        el.style.backgroundColor = state === "1" ? "limegreen" : "#555";
+      }
+    }
+    // Initialize on load
+    renderButtons();
+    renderMonitors();
+  </script>
+</body>
+</html>
